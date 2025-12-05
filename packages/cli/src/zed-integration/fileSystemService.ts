@@ -5,7 +5,7 @@
  */
 
 import type { FileSystemService } from '@google/gemini-cli-core';
-import type * as acp from '@agentclientprotocol/sdk';
+import * as acp from '@agentclientprotocol/sdk';
 
 /**
  * ACP client-based implementation of FileSystemService
@@ -14,7 +14,7 @@ export class AcpFileSystemService implements FileSystemService {
   constructor(
     private readonly connection: acp.AgentSideConnection,
     private readonly sessionId: string,
-    private readonly capabilities: acp.FileSystemCapability,
+    readonly capabilities: acp.FileSystemCapability,
     private readonly fallback: FileSystemService,
   ) {}
 
@@ -23,14 +23,34 @@ export class AcpFileSystemService implements FileSystemService {
       return this.fallback.readTextFile(filePath);
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-    const response = await this.connection.readTextFile({
-      path: filePath,
-      sessionId: this.sessionId,
-    });
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+      const response = await this.connection.readTextFile({
+        path: filePath,
+        sessionId: this.sessionId,
+      });
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-    return response.content;
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+      return response.content;
+    } catch (err) {
+      // Convert ACP error to Node.js ENOENT for file not found
+      const requestErrorCode =
+        err instanceof acp.RequestError
+          ? err.code
+          : typeof err === 'object' && err !== null && 'code' in err
+            ? (err as { code?: unknown }).code
+            : undefined;
+      if (requestErrorCode === -32002 || requestErrorCode === '-32002') {
+        const nodeErr = new Error(
+          `ENOENT: open '${filePath}'`,
+        ) as NodeJS.ErrnoException;
+        nodeErr.code = 'ENOENT';
+        nodeErr.syscall = 'open';
+        nodeErr.path = filePath;
+        throw nodeErr;
+      }
+      throw err;
+    }
   }
 
   async writeTextFile(filePath: string, content: string): Promise<void> {
@@ -43,5 +63,9 @@ export class AcpFileSystemService implements FileSystemService {
       content,
       sessionId: this.sessionId,
     });
+  }
+
+  findFiles(fileName: string, searchPaths: readonly string[]): string[] {
+    return this.fallback.findFiles(fileName, searchPaths);
   }
 }
